@@ -1,13 +1,11 @@
-import shared
+import utili
+import logging
+from training import train
+from data.dataset import QueryRewriteDataset
+import torch
+from transformers import (GPT2Config, GPT2LMHeadModel, GPT2Tokenizer)
 
 logger = logging.getLogger(__name__)
-
-def set_seed(args):
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if args.n_gpu > 0:
-        torch.cuda.manual_seed_all(args.seed)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -67,13 +65,13 @@ def main():
     logger.warning("device: %s, n_gpu: %s", device, args.n_gpu)
 
     # Set seed
-    set_seed(args)
+    utili.set_seed(args)
 
     config_class, model_class, tokenizer_class = GPT2Config, GPT2LMHeadModel, GPT2Tokenizer
     config = config_class.from_pretrained(args.model_name_or_path)
 
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
-    tokenizer.add_special_tokens(shared.special_tokens_dict)
+    tokenizer.add_special_tokens(utili.special_tokens_dict)
 
     if args.block_size <= 0:
         args.block_size = tokenizer.max_len_single_sentence
@@ -96,8 +94,8 @@ def main():
     logger.info("Training/evaluation parameters %s", args)
 
     # Training
-    train_dataset = shared.load_examples([args.train_file], args, tokenizer)
-    global_step, tr_loss = shared.train(args, train_dataset, model, tokenizer)
+    train_dataset = QueryRewriteDataset([args.train_file], tokenizer, args)
+    global_step, tr_loss = train(args, train_dataset, model, tokenizer, logger)
     logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 
     # Saving

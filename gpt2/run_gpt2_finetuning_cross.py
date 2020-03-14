@@ -1,14 +1,11 @@
-import shared
+import utili
+import logging
+from training import train
+from data.dataset import QueryRewriteDataset
+import torch
+from transformers import (GPT2Config, GPT2LMHeadModel, GPT2Tokenizer)
 
 logger = logging.getLogger(__name__)
-
-def set_seed(args):
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if args.n_gpu > 0:
-        torch.cuda.manual_seed_all(args.seed)
-
 
 def main():
     parser = argparse.ArgumentParser()
@@ -68,14 +65,14 @@ def main():
     # Setup logging
     logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                         datefmt = '%m/%d/%Y %H:%M:%S',
-                        level = logging.INFO if args.local_rank in [-1, 0] else logging.WARN)
+                        level = logging.INFO)
     logger.warning("device: %s, n_gpu: %s", device, args.n_gpu)
 
     # Training
-    for i in range(0, len(shared.segments_name)):
+    for i in range(0, len(utili.segments_name)):
 
         # Set seed
-        set_seed(args)
+        utili.set_seed(args)
 
         config_class, model_class, tokenizer_class = GPT2Config, GPT2LMHeadModel, GPT2Tokenizer
         postfix = ('-' + str(i)) if args.load_from_multiple_models else ''
@@ -83,7 +80,7 @@ def main():
         config = config_class.from_pretrained(args.model_name_or_path + postfix)  # gpt2 size
 
         tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path + postfix)
-        tokenizer.add_special_tokens(shared.special_tokens_dict)
+        tokenizer.add_special_tokens(utili.special_tokens_dict)
 
         if args.block_size <= 0:
             args.block_size = tokenizer.max_len_single_sentence  # Our input block size will be the max possible for the model
@@ -99,36 +96,28 @@ def main():
         logger.info("Added sep_token (id: %s), pad_token (id: %s), bos_token (id: %s) and eos_token (id: %s)", tokenizer.sep_token_id, tokenizer.pad_token_id, tokenizer.bos_token_id, tokenizer.eos_token_id)
         model.to(args.device)
 
-        if args.local_rank == 0:
-            torch.distributed.barrier()  # End of barrier to make sure only the first process in distributed training download model & vocab
-
         logger.info("Training/evaluation parameters %s", args)
 
-        train_segments = [shared.segments_name[x] for x in range(i)] + [shared.segments_name[x] for x in range(i+1, len(shared.segments_name))]
+        train_segments = [utili.segments_name[x] for x in range(i)] + [utili.segments_name[x] for x in range(i+1, len(utili.segments_name))]
         print("train_segments: {}".format(train_segments))
 
-        train_dataset = shared.load_examples(train_segments, args, tokenizer, args.num_sampled_sesions)
-        global_step, tr_loss = shared.train(args, train_dataset, model, tokenizer, cross_validate_id=i)
+        train_dataset = QueryRewriteDataset(train_segments, tokenizer, args, args.num_sampled_sesions)
+        global_step, tr_loss = train(args, train_dataset, model, tokenizer, logger, cross_validate_id=i)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 
-
-        # Saving best-practices: if you use save_pretrained for the model and tokenizer, you can reload them using from_pretrained()
         # Create output directory if needed
         segment_output_dir = args.output_dir + '-' + str(i)
         if not os.path.exists(segment_output_dir):
             os.makedirs(segment_output_dir)
 
         logger.info("Saving model checkpoint to %s", segment_output_dir)
-        # Save a trained model, configuration and tokenizer using `save_pretrained()`.
-        # They can then be reloaded using `from_pretrained()`
-        model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
+        model_to_save = model.module if hasattr(model, 'module') else model
         model_to_save.save_pretrained(segment_output_dir)
         tokenizer.save_pretrained(segment_output_dir)
 
-        # Good practice: save your training arguments together with the trained model
         torch.save(args, os.path.join(segment_output_dir, 'training_args.bin'))
 
-        del model  # free gpu memory
+        del model
         torch.cuda.empty_cache() 
 
 

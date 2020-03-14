@@ -1,23 +1,16 @@
-import shared
-
-from transformers import WEIGHTS_NAME
-
+import utili
+import logging
+from training import train
+from data.dataset import read_eval_samples
+import torch
+from transformers import (WEIGHTS_NAME, GPT2Config, GPT2LMHeadModel, GPT2Tokenizer)
+from prediction import sample_sequence
+from utili import MAX_LENGTH
 
 logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                     datefmt = '%m/%d/%Y %H:%M:%S',
                     level = logging.INFO)
 logger = logging.getLogger(__name__)
-
-MAX_LENGTH = int(100)  # Hardcoded max length to avoid infinite loop
-
-ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (GPT2Config)), ())
-
-
-def set_seed(args):
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if args.n_gpu > 0:
-        torch.cuda.manual_seed_all(args.seed)
 
 
 def main():
@@ -25,7 +18,7 @@ def main():
     parser.add_argument("--model_type", default="gpt2", type=str, required=True,
                         help="Model type selected in the list: " + ", ".join(MODEL_CLASSES.keys()))
     parser.add_argument("--model_name_or_path", default=None, type=str, required=True,
-                        help="Path to pre-trained model or shortcut name selected in the list: " + ", ".join(ALL_MODELS))
+                        help="Path to pre-trained model or shortcut name")
     parser.add_argument("--length", type=int, default=20)
     parser.add_argument("--temperature", type=float, default=1.0,
                         help="temperature of 0 implies greedy sampling")
@@ -43,11 +36,11 @@ def main():
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
     args.n_gpu = torch.cuda.device_count()
 
-    for i in range(len(segments_name)):
+    for i in range(len(utili.segments_name)):
 
-        eval_segment = segments_name[i]
+        eval_segment = utili.segments_name[i]
 
-        set_seed(args)
+        utili.set_seed(args)
 
         args.model_type = args.model_type.lower()
         model_class, tokenizer_class = GPT2LMHeadModel, GPT2Tokenizer
@@ -65,12 +58,10 @@ def main():
         elif args.length < 0:
             args.length = MAX_LENGTH  # avoid infinite loop
 
-        examples, raw = shared.read_eval_samples(tokenizer, args, [eval_segment])
+        examples, raw = read_eval_samples(tokenizer, args, [eval_segment])
         i = 0
         for example in examples:
-            # print(example[0] + "_" + example[1])
-            # print("input: " + tokenizer.decode(example[2], clean_up_tokenization_spaces=True))
-            out = shared.sample_sequence(
+            out = sample_sequence(
                 model=model,
                 context=example[2],
                 length=args.length,
@@ -80,16 +71,11 @@ def main():
                 device=args.device,
                 tokenizer=tokenizer
             )
-            # print("output: ", end='')
             out = out[:, len(example[2]):].tolist()
             pred = None
             for o in out:
                 text = tokenizer.decode(o, clean_up_tokenization_spaces=True)
-                # text = text[: text.find(args.stop_token) if args.stop_token else None]
-                # print(text)
                 pred = text
-            # print("target: " + example[3])
-            # print()
             raw[i]['output'] = pred
             output_line = json.dumps(raw[i])
             i += 1

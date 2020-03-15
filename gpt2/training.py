@@ -1,7 +1,7 @@
 import logging
 import os
 import json
-import utili
+from utili import utili
 
 import torch
 from torch.utils.data import DataLoader, Dataset, RandomSampler

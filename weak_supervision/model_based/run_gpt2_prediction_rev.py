@@ -1,10 +1,11 @@
-import utili
+import argparse
+from utili import utili
 import logging
 from training import train
 import torch
 from transformers import (WEIGHTS_NAME, GPT2Config, GPT2LMHeadModel, GPT2Tokenizer)
-from prediction import sample_sequence
-from utili import MAX_LENGTH
+from gpt2.prediction import sample_sequence
+from utili.utili import MAX_LENGTH
 
 
 logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',

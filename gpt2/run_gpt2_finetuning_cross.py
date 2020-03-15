@@ -1,4 +1,5 @@
-import utili
+import argparse
+from utili import utili
 import logging
 from training import train
 from data.dataset import QueryRewriteDataset
@@ -49,10 +50,9 @@ def main():
                         help="Overwrite the content of the output directory")
     parser.add_argument('--seed', type=int, default=42,
                         help="random seed for initialization")
-    parser.add_argument("--simplify", action="store_true", 
-                        help="Set this flag to train the simplifier, not the rewriter.")
 
     args = parser.parse_args()
+    args.simplifier = False
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and not args.overwrite_output_dir:
         raise ValueError("Output directory ({}) already exists and is not empty. Use --overwrite_output_dir to overcome.".format(args.output_dir))

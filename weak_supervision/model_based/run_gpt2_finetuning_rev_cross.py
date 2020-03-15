@@ -15,13 +15,15 @@ def main():
                         help="The output directory where the model predictions and checkpoints will be written.")
     parser.add_argument("--model_name_or_path", default="gpt2-medium", type=str,
                         help="The model checkpoint for weights initialization.")
+    parser.add_argument("--load_from_multiple_models", action='store_true', 
+                        help="Whether to load from multiple models with postfix -0 to -4.")
     parser.add_argument("--block_size", default=150, type=int,
                         help="Optional input sequence length after tokenization."
                              "The training dataset will be truncated in block of this size for training."
                              "Default to the model max input length for single sentence inputs (take into account special tokens).")
-    parser.add_argument("--train_file", default="", type=str,
-                        help="Training file (NDJson).")
-
+    parser.add_argument("--start_checkpoint", default=-1, type=int, help="Start from checkpoint X.")
+    parser.add_argument("--num_sampled_sessions", default=40, type=int,
+                        help="Sample X sessions in a total of 40.")
     parser.add_argument("--per_gpu_train_batch_size", default=4, type=int,
                         help="Batch size per GPU/CPU for training.")
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
@@ -48,10 +50,9 @@ def main():
                         help="Overwrite the content of the output directory")
     parser.add_argument('--seed', type=int, default=42,
                         help="random seed for initialization")
-    parser.add_argument('--from_scratch', action='store_true', help="Set this flag to train from scratch.")
 
     args = parser.parse_args()
-    args.simplifier = False
+    args.simplifier = True  # Train the simplifier
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and not args.overwrite_output_dir:
         raise ValueError("Output directory ({}) already exists and is not empty. Use --overwrite_output_dir to overcome.".format(args.output_dir))
@@ -66,51 +67,57 @@ def main():
                         level = logging.INFO)
     logger.warning("device: %s, n_gpu: %s", device, args.n_gpu)
 
-    # Set seed
-    utili.set_seed(args)
-
-    config_class, model_class, tokenizer_class = GPT2Config, GPT2LMHeadModel, GPT2Tokenizer
-    config = config_class.from_pretrained(args.model_name_or_path)
-
-    tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
-    tokenizer.add_special_tokens(utili.special_tokens_dict)
-
-    if args.block_size <= 0:
-        args.block_size = tokenizer.max_len_single_sentence
-    args.block_size = min(args.block_size, tokenizer.max_len_single_sentence)
-
-    model = None
-    if not args.from_scratch:
-        model = model_class.from_pretrained(args.model_name_or_path)
-    else:
-        model = model_class(config=config)  # from scratch
-
-    model.resize_token_embeddings(len(tokenizer))  # resize
-    assert tokenizer.sep_token == "<SEP>"
-    assert tokenizer.pad_token == "<PAD>"
-    assert tokenizer.bos_token == "<BOS>"
-    assert tokenizer.eos_token == "<EOS>"
-    logger.info("Added sep_token (id: %s), pad_token (id: %s), bos_token (id: %s) and eos_token (id: %s)", tokenizer.sep_token_id, tokenizer.pad_token_id, tokenizer.bos_token_id, tokenizer.eos_token_id)
-    model.to(args.device)
-
-    logger.info("Training/evaluation parameters %s", args)
-
     # Training
-    train_dataset = QueryRewriteDataset([args.train_file], tokenizer, args)
-    global_step, tr_loss = train(args, train_dataset, model, tokenizer, logger)
-    logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
+    for i in range(0, len(utili.segments_name)):
 
-    # Saving
-    # Create output directory if needed
-    if not os.path.exists(args.output_dir) and args.local_rank in [-1, 0]:
-        os.makedirs(args.output_dir)
+        # Set seed
+        utili.set_seed(args)
 
-    logger.info("Saving model checkpoint to %s", args.output_dir)
-    model_to_save = model.module if hasattr(model, 'module') else model
-    model_to_save.save_pretrained(args.output_dir)
-    tokenizer.save_pretrained(args.output_dir)
+        config_class, model_class, tokenizer_class = GPT2Config, GPT2LMHeadModel, GPT2Tokenizer
+        postfix = ('-' + str(i)) if args.load_from_multiple_models else ''
+        
+        config = config_class.from_pretrained(args.model_name_or_path + postfix)  # gpt2 size
 
-    torch.save(args, os.path.join(args.output_dir, 'training_args.bin'))
+        tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path + postfix)
+        tokenizer.add_special_tokens(utili.special_tokens_dict)
+
+        if args.block_size <= 0:
+            args.block_size = tokenizer.max_len_single_sentence  # Our input block size will be the max possible for the model
+        args.block_size = min(args.block_size, tokenizer.max_len_single_sentence)
+
+        postfix += ('/checkpoint-' + str(args.start_checkpoint)) if (args.start_checkpoint != -1) else ''
+        model = model_class.from_pretrained(args.model_name_or_path + postfix)
+        model.resize_token_embeddings(len(tokenizer))  # resize
+        assert tokenizer.sep_token == '<SEP>'
+        assert tokenizer.pad_token == '<PAD>'
+        assert tokenizer.bos_token == '<BOS>'
+        assert tokenizer.eos_token == "<EOS>"
+        logger.info("Added sep_token (id: %s), pad_token (id: %s), bos_token (id: %s) and eos_token (id: %s)", tokenizer.sep_token_id, tokenizer.pad_token_id, tokenizer.bos_token_id, tokenizer.eos_token_id)
+        model.to(args.device)
+
+        logger.info("Training/evaluation parameters %s", args)
+
+        train_segments = [utili.segments_name[x] for x in range(i)] + [utili.segments_name[x] for x in range(i+1, len(utili.segments_name))]
+        print("train_segments: {}".format(train_segments))
+
+        train_dataset = QueryRewriteDataset(train_segments, tokenizer, args, args.num_sampled_sesions)
+        global_step, tr_loss = train(args, train_dataset, model, tokenizer, logger, cross_validate_id=i)
+        logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
+
+        # Create output directory if needed
+        segment_output_dir = args.output_dir + '-' + str(i)
+        if not os.path.exists(segment_output_dir):
+            os.makedirs(segment_output_dir)
+
+        logger.info("Saving model checkpoint to %s", segment_output_dir)
+        model_to_save = model.module if hasattr(model, 'module') else model
+        model_to_save.save_pretrained(segment_output_dir)
+        tokenizer.save_pretrained(segment_output_dir)
+
+        torch.save(args, os.path.join(segment_output_dir, 'training_args.bin'))
+
+        del model
+        torch.cuda.empty_cache() 
 
 
 if __name__ == "__main__":
